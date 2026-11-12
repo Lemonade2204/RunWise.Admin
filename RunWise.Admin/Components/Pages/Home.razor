@@ -1,0 +1,260 @@
+﻿@page "/"
+@inject SupabaseAdminClient Supabase
+@inject AdminClock Clock
+
+<PageTitle>Dashboard · RunWise Admin</PageTitle>
+
+<div class="d-flex align-items-center justify-content-between mb-3">
+    <h1 class="h3 mb-0">Dashboard</h1>
+    <div class="d-flex align-items-center gap-2">
+        <span class="text-muted small">Times in @Clock.ZoneName</span>
+        <button class="btn btn-sm btn-outline-secondary" @onclick="LoadAsync" disabled="@loading">Refresh</button>
+    </div>
+</div>
+
+@if (error != null)
+{
+    <div class="alert alert-danger">@error</div>
+}
+else if (loading && users == null)
+{
+    <p class="text-muted">Loading…</p>
+}
+else if (users != null && runs != null)
+{
+    @* ---------- Users and runs ---------- *@
+    <div class="stat-grid mb-4">
+        <div class="stat"><div class="stat-label">Users</div><div class="stat-value">@users.Count</div>
+            <div class="stat-sub">+@NewUsers(7) in the last 7 days</div></div>
+        <div class="stat"><div class="stat-label">Active runners</div><div class="stat-value">@ActiveRunners(7)</div>
+            <div class="stat-sub">ran in the last 7 days</div></div>
+        <div class="stat"><div class="stat-label">Runs</div><div class="stat-value">@runs.Count.ToString("N0")</div>
+            <div class="stat-sub">@RunsSince(7) in the last 7 days</div></div>
+        <div class="stat"><div class="stat-label">Distance</div><div class="stat-value">@runs.Sum(r => r.DistanceKm).ToString("N0") km</div>
+            <div class="stat-sub">@RecentKm(7).ToString("N1") km in the last 7 days</div></div>
+        <div class="stat"><div class="stat-label">Avg distance</div><div class="stat-value">@AvgKm(runs).ToString("N1") km</div>
+            <div class="stat-sub">@AvgKm(Recent(28)).ToString("N1") km in the last 4 weeks</div></div>
+    </div>
+
+    <div class="row g-4 mb-4">
+        <div class="col-lg-7">
+            <div class="panel">
+                <h2 class="h6 mb-3">Runs per day · last 14 days</h2>
+                <div class="bars" role="img" aria-label="@BarsDescription()">
+                    @foreach (var (day, count) in perDay)
+                    {
+                        <div class="bar-col" title="@day.ToString("ddd, MMM d"): @count runs">
+                            <div class="bar-value">@(count > 0 ? count : "")</div>
+                            <div class="bar" style="height:@Pct(count, perDay.Max(p => p.Count))%"></div>
+                            <div class="bar-label">@day.Day</div>
+                        </div>
+                    }
+                </div>
+            </div>
+        </div>
+        <div class="col-lg-5">
+            <div class="panel">
+                <div class="d-flex justify-content-between mb-2">
+                    <h2 class="h6 mb-0">Newest users</h2>
+                    <a href="users" class="small">All users ›</a>
+                </div>
+                <table class="table table-sm mb-0">
+                    <tbody>
+                        @foreach (var u in users.Take(6))
+                        {
+                            <tr>
+                                <td><a href="users/@u.Id" class="text-reset">@(u.Username ?? u.Email)</a><div class="text-muted small">@u.Email</div></td>
+                                <td class="text-end text-muted small">@Clock.ToLocal(u.CreatedAt).ToString("MMM d")</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    @* ---------- Weekly runs and km ---------- *@
+    <div class="panel mb-4">
+        <div class="d-flex justify-content-between align-items-baseline mb-3">
+            <h2 class="h6 mb-0">Runs and distance per week · last 12 weeks</h2>
+            <span class="text-muted small">Bar = runs · label = km</span>
+        </div>
+        <div class="bars" role="img" aria-label="@WeeksDescription()">
+            @foreach (var w in weekly)
+            {
+                <div class="bar-col" title="Week of @w.WeekStart.ToString("MMM d"): @w.Runs runs, @w.Km.ToString("N1") km">
+                    <div class="bar-value">@(w.Km > 0 ? w.Km.ToString("N0") : "")</div>
+                    <div class="bar" style="height:@Pct(w.Runs, weekly.Max(x => x.Runs))%"></div>
+                    <div class="bar-label">@w.WeekStart.ToString("M/d")</div>
+                </div>
+            }
+        </div>
+    </div>
+
+    <div class="row g-4 mb-4">
+        @* ---------- Retention ---------- *@
+        <div class="col-lg-6">
+            <div class="panel h-100">
+                <h2 class="h6 mb-1">Retention</h2>
+                <p class="text-muted small mb-3">Users who were still running 7 and 30 days after signing up.</p>
+                @foreach (var r in retention)
+                {
+                    <div class="mb-3">
+                        <div class="d-flex justify-content-between">
+                            <span class="fw-semibold">After @r.Days days</span>
+                            <span>@(r.Eligible > 0 ? r.Share.ToString("P0") : "–")
+                                <span class="text-muted small">(@r.Retained of @r.Eligible)</span></span>
+                        </div>
+                        <div class="meter"><div class="meter-fill" style="width:@Pct(r.Retained, r.Eligible)%"></div></div>
+                    </div>
+                }
+                @if (retention.All(r => r.Eligible == 0))
+                {
+                    <p class="text-muted small mb-0">No users have been signed up long enough yet.</p>
+                }
+            </div>
+        </div>
+
+        @* ---------- Health Connect ---------- *@
+        <div class="col-lg-6">
+            <div class="panel h-100">
+                <h2 class="h6 mb-1">Health Connect / watch usage</h2>
+                <p class="text-muted small mb-3">Share of runs that recorded heart rate. Only whether it was recorded is read, never the values.</p>
+                @foreach (var (label, share) in heartRate)
+                {
+                    <div class="mb-3">
+                        <div class="d-flex justify-content-between">
+                            <span class="fw-semibold">@label</span>
+                            <span>@(share.Total > 0 ? ((double)share.WithHeartRate / share.Total).ToString("P0") : "–")
+                                <span class="text-muted small">(@share.WithHeartRate of @share.Total runs)</span></span>
+                        </div>
+                        <div class="meter"><div class="meter-fill" style="width:@Pct(share.WithHeartRate, share.Total)%"></div></div>
+                    </div>
+                }
+                <div class="text-muted small">
+                    Users with at least one heart-rate run: <strong>@runs.Where(r => r.HasHeartRate).Select(r => r.UserId).Distinct().Count()</strong>
+                    of @runs.Select(r => r.UserId).Distinct().Count() runners
+                </div>
+            </div>
+        </div>
+    </div>
+
+    @* ---------- Peak running times ---------- *@
+    <div class="panel mb-4">
+        <div class="d-flex flex-wrap justify-content-between align-items-baseline mb-3 gap-2">
+            <h2 class="h6 mb-0">Peak running times · all runs</h2>
+            @if (AdminStats.Busiest(peak) is var (busyDay, busyHour))
+            {
+                <span class="small">Busiest day <strong>@busyDay</strong> · busiest hour <strong>@busyHour</strong></span>
+            }
+        </div>
+        <div class="table-responsive">
+            <table class="heatmap" role="img" aria-label="Runs by weekday and hour">
+                <thead>
+                    <tr>
+                        <th></th>
+                        @for (int h = 0; h < 24; h++)
+                        {
+                            <th>@(h % 3 == 0 ? AdminStats.HourName(h).Replace(" ", "") : "")</th>
+                        }
+                    </tr>
+                </thead>
+                <tbody>
+                    @for (int d = 0; d < 7; d++)
+                    {
+                        var dayIndex = d;
+                        <tr>
+                            <th>@AdminStats.DayName(dayIndex)[..3]</th>
+                            @for (int h = 0; h < 24; h++)
+                            {
+                                var count = peak[dayIndex, h];
+                                <td style="background:@HeatColor(count)" title="@AdminStats.DayName(dayIndex) @AdminStats.HourName(h): @count runs"></td>
+                            }
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+        <div class="text-muted small mt-2">Darker = more runs started in that hour.</div>
+    </div>
+}
+
+@code {
+    private List<UserRow>? users;
+    private List<RunRow>? runs;
+    private List<(DateTime Day, int Count)> perDay = new();
+    private List<WeekTotal> weekly = new();
+    private List<RetentionResult> retention = new();
+    private List<(string Label, (int WithHeartRate, int Total) Share)> heartRate = new();
+    private int[,] peak = new int[7, 24];
+    private int peakMax;
+    private bool loading;
+    private string? error;
+
+    protected override Task OnInitializedAsync() => LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        loading = true;
+        error = null;
+        try
+        {
+            users = await Supabase.GetUsersAsync();
+            runs = await Supabase.GetRunsAsync(since: null);
+
+            perDay = RunsPerDay(14);
+            weekly = AdminStats.Weekly(runs, Clock, 12);
+            retention = new() { AdminStats.Retention(users, runs, 7), AdminStats.Retention(users, runs, 30) };
+            heartRate = new()
+            {
+                ("Last 30 days", AdminStats.HeartRateShare(Recent(30))),
+                ("All time", AdminStats.HeartRateShare(runs)),
+            };
+            peak = AdminStats.PeakGrid(runs, Clock);
+            peakMax = peak.Cast<int>().DefaultIfEmpty(0).Max();
+        }
+        catch (Exception)
+        {
+            error = "Couldn't load data from Supabase. Check the secret key and that the admins table exists.";
+        }
+        finally
+        {
+            loading = false;
+        }
+    }
+
+    // Start of the local day `days - 1` days ago, as UTC (stored times are UTC)
+    private DateTime Since(int days) => Clock.ToUtc(Clock.Today.AddDays(-(days - 1)));
+
+    private List<RunRow> Recent(int days) => runs!.Where(r => r.StartedAt >= Since(days)).ToList();
+    private int NewUsers(int days) => users!.Count(u => u.CreatedAt >= Since(days));
+    private int RunsSince(int days) => Recent(days).Count;
+    private double RecentKm(int days) => Recent(days).Sum(r => r.DistanceKm);
+    private int ActiveRunners(int days) => Recent(days).Select(r => r.UserId).Distinct().Count();
+    private static double AvgKm(List<RunRow> list) => list.Count > 0 ? list.Average(r => r.DistanceKm) : 0;
+
+    private List<(DateTime Day, int Count)> RunsPerDay(int days)
+    {
+        var counts = runs!.GroupBy(r => Clock.ToLocal(r.StartedAt).Date).ToDictionary(g => g.Key, g => g.Count());
+        return Enumerable.Range(0, days).Select(i => Clock.Today.AddDays(i - days + 1))
+                         .Select(d => (d, counts.GetValueOrDefault(d))).ToList();
+    }
+
+    // Bar height / meter width in percent, formatted for CSS
+    private static string Pct(double value, double max) =>
+        (max <= 0 ? 0 : Math.Max(value > 0 ? 2 : 0, 100.0 * value / max)).ToString("0.#", System.Globalization.CultureInfo.InvariantCulture);
+
+    // Brand blue with opacity by count; empty cells stay light grey
+    private string HeatColor(int count)
+    {
+        if (count == 0 || peakMax == 0) return "#F1F3F8";
+        var alpha = 0.15 + 0.85 * count / peakMax;
+        return $"rgba(74,108,247,{alpha.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture)})";
+    }
+
+    private string BarsDescription() =>
+        "Runs per day: " + string.Join(", ", perDay.Select(p => $"{p.Day:MMM d} {p.Count}"));
+
+    private string WeeksDescription() =>
+        "Runs per week: " + string.Join(", ", weekly.Select(w => $"week of {w.WeekStart:MMM d} {w.Runs} runs {w.Km:N1} km"));
+}

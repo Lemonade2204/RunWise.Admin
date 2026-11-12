@@ -1,0 +1,81 @@
+@page "/login"
+@layout LoginLayout
+@inject SupabaseAdminClient Supabase
+@inject AdminSession Session
+@inject NavigationManager Nav
+
+<PageTitle>Sign in · RunWise Admin</PageTitle>
+
+<div class="login-card">
+    <div class="login-brand">RunWise <span>Admin</span></div>
+    <p class="text-muted small mb-4">Sign in with your RunWise account. Only accounts on the admin list can enter.</p>
+
+    <EditForm Model="form" OnValidSubmit="SignInAsync" FormName="login">
+        <div class="mb-3">
+            <label class="form-label" for="email">Email</label>
+            <InputText id="email" class="form-control" @bind-Value="form.Email" autocomplete="username" />
+        </div>
+        <div class="mb-3">
+            <label class="form-label" for="password">Password</label>
+            <InputText id="password" type="password" class="form-control" @bind-Value="form.Password" autocomplete="current-password" />
+        </div>
+
+        @if (error != null)
+        {
+            <div class="alert alert-danger py-2 small" role="alert">@error</div>
+        }
+
+        <button type="submit" class="btn btn-brand w-100" disabled="@busy">
+            @(busy ? "Signing in…" : "Sign in")
+        </button>
+    </EditForm>
+</div>
+
+@code {
+    private readonly LoginForm form = new();
+    private string? error;
+    private bool busy;
+
+    protected override void OnInitialized()
+    {
+        if (Session.IsSignedIn) Nav.NavigateTo("/");
+    }
+
+    private async Task SignInAsync()
+    {
+        error = null;
+        if (string.IsNullOrWhiteSpace(form.Email) || string.IsNullOrEmpty(form.Password))
+        {
+            error = "Enter your email and password.";
+            return;
+        }
+
+        busy = true;
+        try
+        {
+            var (admin, message) = await Supabase.SignInAsync(form.Email, form.Password);
+            if (admin == null)
+            {
+                error = message;
+                return;
+            }
+            Session.SignIn(admin.Id, admin.Email);
+            Nav.NavigateTo("/");
+        }
+        catch (Exception)
+        {
+            error = "Couldn't reach Supabase. Check your connection and try again.";
+        }
+        finally
+        {
+            form.Password = "";
+            busy = false;
+        }
+    }
+
+    private sealed class LoginForm
+    {
+        public string Email { get; set; } = "";
+        public string Password { get; set; } = "";
+    }
+}

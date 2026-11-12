@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <BlazorDisableThrowNavigationException>true</BlazorDisableThrowNavigationException>
+    <!-- Where `dotnet user-secrets` keeps the Supabase secret key (outside the repo) -->
+    <UserSecretsId>runwise-admin-6f1c2e8a-4b7d-4c1e-9a3f-2d5b8e0c7a41</UserSecretsId>
+  </PropertyGroup>
+
+</Project>

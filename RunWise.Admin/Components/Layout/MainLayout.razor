@@ -1,0 +1,50 @@
+﻿@inherits LayoutComponentBase
+@implements IDisposable
+@inject AdminSession Session
+@inject NavigationManager Nav
+
+@* Pages only render for a signed-in admin; everyone else is sent to /login *@
+@if (Session.IsSignedIn)
+{
+    <div class="page">
+        <div class="sidebar">
+            <NavMenu />
+        </div>
+
+        <main>
+            <div class="top-row px-4">
+                <span class="text-muted small me-3">@Session.Email</span>
+                <button class="btn btn-sm btn-outline-secondary" @onclick="SignOut">Sign out</button>
+            </div>
+
+            <article class="content px-4">
+                @Body
+            </article>
+        </main>
+    </div>
+}
+
+<div id="blazor-error-ui" data-nosnippet>
+    An unhandled error has occurred.
+    <a href="." class="reload">Reload</a>
+    <span class="dismiss">🗙</span>
+</div>
+
+@code {
+    protected override void OnInitialized() => Session.Changed += OnSessionChanged;
+
+    protected override void OnParametersSet()
+    {
+        if (!Session.IsSignedIn) Nav.NavigateTo("/login");
+    }
+
+    private void SignOut()
+    {
+        Session.SignOut();
+        Nav.NavigateTo("/login");
+    }
+
+    private void OnSessionChanged() => InvokeAsync(StateHasChanged);
+
+    public void Dispose() => Session.Changed -= OnSessionChanged;
+}

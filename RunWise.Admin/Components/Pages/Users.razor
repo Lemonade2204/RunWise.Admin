@@ -1,0 +1,144 @@
+@page "/users"
+@inject SupabaseAdminClient Supabase
+@inject AdminSession Session
+@inject AdminClock Clock
+@inject IJSRuntime JS
+@inject ILogger<Users> Log
+
+<PageTitle>Users · RunWise Admin</PageTitle>
+
+<div class="d-flex flex-wrap gap-2 align-items-center justify-content-between mb-3">
+    <h1 class="h3 mb-0">Users</h1>
+    <div class="d-flex gap-2">
+        <input class="form-control form-control-sm" style="min-width:240px" placeholder="Search email or username"
+               @bind="search" @bind:event="oninput" aria-label="Search users" />
+        <button class="btn btn-sm btn-outline-secondary" @onclick="LoadAsync" disabled="@loading">Refresh</button>
+    </div>
+</div>
+
+@if (message != null)
+{
+    <div class="alert @(messageIsError ? "alert-danger" : "alert-success") py-2">@message</div>
+}
+
+@if (users == null)
+{
+    <p class="text-muted">@(loading ? "Loading…" : "Couldn't load users.")</p>
+}
+else
+{
+    <p class="text-muted small">@Filtered.Count() of @users.Count users</p>
+    <div class="panel p-0">
+        <div class="table-responsive">
+            <table class="table table-hover align-middle mb-0">
+                <thead>
+                    <tr>
+                        <th>User</th>
+                        <th>Joined</th>
+                        <th>Last sign-in</th>
+                        <th class="text-end">Runs</th>
+                        <th class="text-end">Distance</th>
+                        <th>Status</th>
+                        <th class="text-end">Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var u in Filtered)
+                    {
+                        var isMe = u.Id == Session.UserId;
+                        <tr>
+                            <td>
+                                <a href="users/@u.Id" class="fw-semibold text-reset">@(u.Username ?? "—")</a>
+                                <div class="text-muted small">@u.Email</div>
+                            </td>
+                            <td class="small">@Clock.ToLocal(u.CreatedAt).ToString("MMM d, yyyy")</td>
+                            <td class="small">@(u.LastSignInAt is DateTime s ? Clock.ToLocal(s).ToString("MMM d, yyyy") : "Never")</td>
+                            <td class="text-end">@u.Runs</td>
+                            <td class="text-end">@u.TotalKm.ToString("N1") km</td>
+                            <td>
+                                @if (u.Disabled) { <span class="badge text-bg-danger">Disabled</span> }
+                                else if (!u.EmailConfirmed) { <span class="badge text-bg-warning">Unconfirmed</span> }
+                                else { <span class="badge text-bg-success">Active</span> }
+                            </td>
+                            <td class="text-end text-nowrap">
+                                <button class="btn btn-sm btn-outline-secondary" disabled="@(busyId == u.Id)"
+                                        @onclick="() => SendResetAsync(u)">Reset password</button>
+                                @if (!isMe)
+                                {
+                                    <button class="btn btn-sm @(u.Disabled ? "btn-outline-success" : "btn-outline-danger") ms-1"
+                                            disabled="@(busyId == u.Id)" @onclick="() => ToggleDisabledAsync(u)">
+                                        @(u.Disabled ? "Enable" : "Disable")
+                                    </button>
+                                }
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    </div>
+    <p class="text-muted small mt-2">
+        Click a name to see that user's activity. Routes, heart rate values and meals stay private to each user.
+    </p>
+}
+
+@code {
+    private List<UserRow>? users;
+    private string search = "";
+    private bool loading;
+    private string? busyId;
+    private string? message;
+    private bool messageIsError;
+
+    private IEnumerable<UserRow> Filtered => string.IsNullOrWhiteSpace(search)
+        ? users!
+        : users!.Where(u => u.Email.Contains(search.Trim(), StringComparison.OrdinalIgnoreCase)
+                         || (u.Username?.Contains(search.Trim(), StringComparison.OrdinalIgnoreCase) ?? false));
+
+    protected override Task OnInitializedAsync() => LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        loading = true;
+        try { users = await Supabase.GetUsersAsync(); }
+        catch (Exception) { Show("Couldn't load users from Supabase.", error: true); }
+        finally { loading = false; }
+    }
+
+    private async Task ToggleDisabledAsync(UserRow u)
+    {
+        var disable = !u.Disabled;
+        var question = disable
+            ? $"Disable {u.Email}? They won't be able to sign in until you enable the account again."
+            : $"Enable {u.Email} again?";
+        if (!await JS.InvokeAsync<bool>("confirm", question)) return;
+
+        busyId = u.Id;
+        var err = await Supabase.SetDisabledAsync(u.Id, disable);
+        busyId = null;
+        if (err != null) { Show(err, error: true); return; }
+
+        Log.LogInformation("Admin {Admin} {Action} user {User}", Session.Email, disable ? "disabled" : "enabled", u.Id);
+        users![users.IndexOf(u)] = u with { Disabled = disable };
+        Show($"{u.Email} is now {(disable ? "disabled" : "enabled")}.", error: false);
+    }
+
+    private async Task SendResetAsync(UserRow u)
+    {
+        if (!await JS.InvokeAsync<bool>("confirm", $"Send a password reset email to {u.Email}?")) return;
+
+        busyId = u.Id;
+        var err = await Supabase.SendPasswordResetAsync(u.Email);
+        busyId = null;
+        if (err != null) { Show(err, error: true); return; }
+
+        Log.LogInformation("Admin {Admin} sent a password reset to user {User}", Session.Email, u.Id);
+        Show($"Password reset email sent to {u.Email}.", error: false);
+    }
+
+    private void Show(string text, bool error)
+    {
+        message = text;
+        messageIsError = error;
+    }
+}

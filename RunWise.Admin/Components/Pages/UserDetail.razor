@@ -1,0 +1,221 @@
+@page "/users/{Id}"
+@inject SupabaseAdminClient Supabase
+@inject AdminSession Session
+@inject AdminClock Clock
+@inject IJSRuntime JS
+@inject ILogger<UserDetail> Log
+
+<PageTitle>@(user?.Username ?? user?.Email ?? "User") · RunWise Admin</PageTitle>
+
+<a href="users" class="small d-inline-block mb-2">‹ All users</a>
+
+@if (message != null)
+{
+    <div class="alert @(messageIsError ? "alert-danger" : "alert-success") py-2">@message</div>
+}
+
+@if (loading && user == null)
+{
+    <p class="text-muted">Loading…</p>
+}
+else if (user == null)
+{
+    <div class="alert alert-warning">@(notFound ? "This user doesn't exist (any more)." : "Couldn't load this user from Supabase.")</div>
+}
+else
+{
+    var isMe = user.Id == Session.UserId;
+
+    <div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-3">
+        <div>
+            <h1 class="h3 mb-0">@(user.Username ?? user.Email)</h1>
+            <div class="text-muted">@user.Email</div>
+        </div>
+        <div class="d-flex gap-2">
+            <button class="btn btn-sm btn-outline-secondary" disabled="@busy" @onclick="SendResetAsync">Reset password</button>
+            @if (!isMe)
+            {
+                <button class="btn btn-sm @(user.Disabled ? "btn-outline-success" : "btn-outline-danger")" disabled="@busy"
+                        @onclick="ToggleDisabledAsync">@(user.Disabled ? "Enable" : "Disable")</button>
+            }
+        </div>
+    </div>
+
+    <div class="row g-4 mb-4">
+        <div class="col-lg-5">
+            <div class="panel h-100">
+                <h2 class="h6 mb-3">Account</h2>
+                <dl class="detail-grid mb-0">
+                    <dt>Status</dt>
+                    <dd>
+                        @if (user.Disabled) { <span class="badge text-bg-danger">Disabled</span> }
+                        else if (!user.EmailConfirmed) { <span class="badge text-bg-warning">Unconfirmed</span> }
+                        else { <span class="badge text-bg-success">Active</span> }
+                    </dd>
+                    <dt>Joined</dt>
+                    <dd>@Clock.ToLocal(user.CreatedAt).ToString("MMM d, yyyy · h:mm tt")</dd>
+                    <dt>Last sign-in</dt>
+                    <dd>@(user.LastSignInAt is DateTime s ? Clock.ToLocal(s).ToString("MMM d, yyyy · h:mm tt") : "Never")</dd>
+                    <dt>Last run</dt>
+                    <dd>@(runs.Count > 0 ? Clock.ToLocal(runs[0].StartedAt).ToString("MMM d, yyyy · h:mm tt") : "No runs yet")</dd>
+                    <dt>App version</dt>
+                    <dd class="text-muted">Not reported by the app yet</dd>
+                    <dt>User ID</dt>
+                    <dd class="small text-muted text-break">@user.Id</dd>
+                </dl>
+            </div>
+        </div>
+        <div class="col-lg-7">
+            <div class="stat-grid">
+                <div class="stat"><div class="stat-label">Runs</div><div class="stat-value">@runs.Count</div>
+                    <div class="stat-sub">@runs.Count(r => r.StartedAt >= Clock.ToUtc(Clock.Today.AddDays(-29))) in the last 30 days</div></div>
+                <div class="stat"><div class="stat-label">Distance</div><div class="stat-value">@runs.Sum(r => r.DistanceKm).ToString("N1") km</div>
+                    <div class="stat-sub">avg @(runs.Count > 0 ? runs.Average(r => r.DistanceKm).ToString("N1") : "0") km per run</div></div>
+                <div class="stat"><div class="stat-label">Avg pace</div>
+                    <div class="stat-value">@AdminStats.Pace(runs.Sum(r => r.DistanceKm), runs.Sum(r => r.DurationSeconds)).Replace(" /km", "")</div>
+                    <div class="stat-sub">min per km · @AdminStats.Duration(runs.Sum(r => r.DurationSeconds)) total</div></div>
+                <div class="stat"><div class="stat-label">Heart rate</div>
+                    <div class="stat-value">@(runs.Count > 0 ? ((double)runs.Count(r => r.HasHeartRate) / runs.Count).ToString("P0") : "–")</div>
+                    <div class="stat-sub">of runs recorded heart rate</div></div>
+            </div>
+        </div>
+    </div>
+
+    <div class="panel mb-4">
+        <h2 class="h6 mb-3">Runs per week · last 12 weeks</h2>
+        <div class="bars" role="img" aria-label="Runs per week for this user">
+            @foreach (var w in weekly)
+            {
+                <div class="bar-col" title="Week of @w.WeekStart.ToString("MMM d"): @w.Runs runs, @w.Km.ToString("N1") km">
+                    <div class="bar-value">@(w.Km > 0 ? w.Km.ToString("N0") : "")</div>
+                    <div class="bar" style="height:@Height(w.Runs)%"></div>
+                    <div class="bar-label">@w.WeekStart.ToString("M/d")</div>
+                </div>
+            }
+        </div>
+    </div>
+
+    <div class="panel p-0">
+        <div class="d-flex justify-content-between align-items-baseline p-3 pb-0">
+            <h2 class="h6 mb-0">Recent runs</h2>
+            <span class="text-muted small">Latest @Math.Min(RecentLimit, runs.Count) of @runs.Count</span>
+        </div>
+        @if (runs.Count == 0)
+        {
+            <p class="text-muted p-3 mb-0">No runs yet.</p>
+        }
+        else
+        {
+            <div class="table-responsive">
+                <table class="table table-hover align-middle mb-0">
+                    <thead>
+                        <tr><th>Date</th><th class="text-end">Distance</th><th class="text-end">Time</th><th class="text-end">Pace</th><th class="text-center">Heart rate</th></tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var r in runs.Take(RecentLimit))
+                        {
+                            <tr>
+                                <td>@Clock.ToLocal(r.StartedAt).ToString("ddd, MMM d, yyyy · h:mm tt")</td>
+                                <td class="text-end">@r.DistanceKm.ToString("N2") km</td>
+                                <td class="text-end">@AdminStats.Duration(r.DurationSeconds)</td>
+                                <td class="text-end">@AdminStats.Pace(r.DistanceKm, r.DurationSeconds)</td>
+                                <td class="text-center">@(r.HasHeartRate ? "✓" : "–")</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        }
+    </div>
+    <p class="text-muted small mt-2">
+        Route maps, heart rate values, meals and injury risk aren't shown here: they stay private to the user.
+        Opening this page is recorded in the server log.
+    </p>
+}
+
+@code {
+    private const int RecentLimit = 25;
+
+    [Parameter] public string Id { get; set; } = "";
+
+    private UserRow? user;
+    private List<RunRow> runs = new();
+    private List<WeekTotal> weekly = new();
+    private bool loading;
+    private bool notFound;
+    private bool busy;
+    private string? message;
+    private bool messageIsError;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        loading = true;
+        try
+        {
+            user = await Supabase.GetUserAsync(Id);
+            notFound = user == null;
+            if (user != null)
+            {
+                runs = await Supabase.GetRunsAsync(since: null, userId: user.Id);   // newest first
+                weekly = AdminStats.Weekly(runs, Clock, 12);
+                // Audit trail: who looked at whose account
+                Log.LogInformation("Admin {Admin} viewed user {User}", Session.Email, user.Id);
+            }
+        }
+        catch (Exception ex)
+        {
+            Log.LogError(ex, "Loading user {User} failed", Id);
+            user = null;
+        }
+        finally
+        {
+            loading = false;
+        }
+    }
+
+    private string Height(int count)
+    {
+        var max = weekly.Count > 0 ? weekly.Max(w => w.Runs) : 0;
+        var pct = max == 0 ? 0 : Math.Max(count > 0 ? 2 : 0, 100.0 * count / max);
+        return pct.ToString("0.#", System.Globalization.CultureInfo.InvariantCulture);
+    }
+
+    private async Task ToggleDisabledAsync()
+    {
+        if (user == null) return;
+        var disable = !user.Disabled;
+        var question = disable
+            ? $"Disable {user.Email}? They won't be able to sign in until you enable the account again."
+            : $"Enable {user.Email} again?";
+        if (!await JS.InvokeAsync<bool>("confirm", question)) return;
+
+        busy = true;
+        var err = await Supabase.SetDisabledAsync(user.Id, disable);
+        busy = false;
+        if (err != null) { Show(err, error: true); return; }
+
+        Log.LogInformation("Admin {Admin} {Action} user {User}", Session.Email, disable ? "disabled" : "enabled", user.Id);
+        user = user with { Disabled = disable };
+        Show($"{user.Email} is now {(disable ? "disabled" : "enabled")}.", error: false);
+    }
+
+    private async Task SendResetAsync()
+    {
+        if (user == null) return;
+        if (!await JS.InvokeAsync<bool>("confirm", $"Send a password reset email to {user.Email}?")) return;
+
+        busy = true;
+        var err = await Supabase.SendPasswordResetAsync(user.Email);
+        busy = false;
+        if (err != null) { Show(err, error: true); return; }
+
+        Log.LogInformation("Admin {Admin} sent a password reset to user {User}", Session.Email, user.Id);
+        Show($"Password reset email sent to {user.Email}.", error: false);
+    }
+
+    private void Show(string text, bool error)
+    {
+        message = text;
+        messageIsError = error;
+    }
+}
